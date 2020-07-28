@@ -1,6 +1,6 @@
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::task::Waker;
+use std::{sync::Arc, task::Waker};
 
 /// The message passed between the backend and frontend. Includes
 /// associated metadata ensuring that the message is delivered to the
@@ -13,7 +13,7 @@ pub struct Message<T> {
     pub inner: T,
 }
 
-impl<'a, T: Deserialize<'a> + Serialize> Message<T> {
+impl<T> Message<T> {
     pub fn generate_subscription_id() -> u32 {
         rand::thread_rng().gen()
     }
@@ -46,12 +46,12 @@ extern "C" {
 /// The waker and the message data for a given message id. When these
 /// are set to `Some`, the `Future` waiting for the message will poll
 /// `Ready`.
-struct WakerMessage {
+struct WakerMessage<T> {
     pub waker: Option<Waker>,
-    pub message: Option<serde_json::Value>,
+    pub message: Option<Arc<T>>,
 }
 
-impl WakerMessage {
+impl<T> WakerMessage<T> {
     pub fn new() -> Self {
         WakerMessage {
             waker: None,
@@ -60,7 +60,7 @@ impl WakerMessage {
     }
 }
 
-impl Default for WakerMessage {
+impl<T> Default for WakerMessage<T> {
     fn default() -> Self {
         Self::new()
     }
@@ -75,7 +75,7 @@ pub mod frontend {
     pub use super::Message;
     use crate::{WakerMessage, invoke_webview};
     use dashmap::DashMap;
-    use serde::{de::DeserializeOwned, Deserialize, Serialize};
+    use serde::{de::DeserializeOwned, Serialize};
     use std::future::Future;
     use std::marker::PhantomData;
     use std::pin::Pin;
@@ -91,8 +91,8 @@ pub mod frontend {
     /// the task which is waiting, and the message data. When the
     /// [WakerMessage](WakerMessage) data is set, the `Future` waiting
     /// for the message will poll `Ready`.
-    type MessageFuturesMap =
-        Arc<DashMap<u32, Arc<RwLock<WakerMessage>>>>;
+    type MessageFuturesMap<RECV> =
+        Arc<DashMap<u32, Arc<RwLock<WakerMessage<RECV>>>>>;
 
     static LISTENER_TYPE: &'static str = "yew-webview-bridge-response";
 
@@ -102,21 +102,25 @@ pub mod frontend {
     ///
     /// To listen to messages from the backend, this service attaches
     /// a listener to the `document` (`document.addListener(...)`).
-    pub struct WebViewMessageService {
+    /// 
+    /// + `<RECV>` is the type type of message this service can receive.
+    /// + `<SND>` is the type of message that the backend can recieve
+    pub struct WebViewMessageService<RECV, SND> {
         /// A unique identifier for the messages communicating with this service.
         subscription_id: u32,
-        message_futures_map: MessageFuturesMap,
+        message_futures_map: MessageFuturesMap<RECV>,
         event_listener: EventListener,
         _event_listener_closure: Closure<dyn Fn(CustomEvent)>,
+        _receive_message_type: PhantomData<SND>
     }
 
-    impl Default for WebViewMessageService {
+    impl<RECV, SND> Default for WebViewMessageService<RECV, SND> where RECV: DeserializeOwned + 'static, SND: Serialize {
         fn default() -> Self {
             Self::new()
         }
     }
 
-    impl Drop for WebViewMessageService {
+    impl<RECV, SND> Drop for WebViewMessageService<RECV, SND> {
         /// Removes the event listener.
         fn drop(&mut self) {
             let window: Window = web_sys::window().expect("unable to obtain current Window");
@@ -130,7 +134,7 @@ pub mod frontend {
         }
     }
 
-    impl WebViewMessageService {
+    impl<RECV, SND> WebViewMessageService<RECV, SND> where RECV: DeserializeOwned + 'static, SND: Serialize {
         pub fn new() -> Self {
             let subscription_id = Message::<()>::generate_subscription_id();
             let message_futures_map = Arc::new(DashMap::new());
@@ -159,20 +163,22 @@ pub mod frontend {
                 message_futures_map,
                 event_listener: listener,
                 _event_listener_closure: closure,
+                _receive_message_type: PhantomData,
             }
         }
 
         /// Handle an event coming from the `web-view` backend, and
         /// respond to it, resolving/waking the relevent pending
         /// future (with matching message id), if there are any.
-        fn response_handler(
+        fn response_handler<R>(
             subscription_id: u32,
-            message_futures_map: MessageFuturesMap,
+            message_futures_map: MessageFuturesMap<R>,
             event: CustomEvent,
-        ) {
+        ) where R: DeserializeOwned {
             let detail: JsValue = event.detail();
             let message_str: String = detail.as_string().expect("expected event detail to be a String");
-            let message: Message<serde_json::Value> = serde_json::from_str(&message_str).expect("unable to parse json from string");
+            let message: Message<R> = serde_json::from_str(&message_str).expect("unable to parse json from string");
+
 
             if message.subscription_id != subscription_id {
                 return;
@@ -186,13 +192,13 @@ pub mod frontend {
 
             let mut future_value_write = future_value.write()
                 .expect("unable to obtain write lock for WakerMessage in message_futures_map");
-            future_value_write.message = Some(message.inner);
+            future_value_write.message = Some(Arc::new(message.inner));
             future_value_write.waker.as_ref().map(|waker| {
                 waker.wake_by_ref();
             });
         }
 
-        fn new_result_future<T>(&self, message_id: u32) -> MessageFuture<T> {
+        fn new_result_future(&self, message_id: u32) -> MessageFuture<RECV> {
             let future = MessageFuture::new();
 
             self.message_futures_map
@@ -201,8 +207,22 @@ pub mod frontend {
             future
         }
 
-        /// Serialize a message and send it to the `web-view` backend.
-        fn send_message_to_webview<T: Serialize>(message: T) {
+        /// Create a new message for this service instance's subscription.
+        /// 
+        /// `<SND>` is the type of the message to be sent.
+        fn new_message(&self, message: SND) -> Message<SND> {
+            Message::for_subscription_id(self.subscription_id, message)
+        }
+
+        /// Send a message to the `web-view` backend, receive a future
+        /// for a reply message.
+        pub fn send_message(
+            &self,
+            message: SND,
+        ) -> MessageFuture<RECV> {
+            let message = self.new_message(message);
+            let message_res = self.new_result_future(message.message_id);
+
             let message_serialized =
                 serde_json::to_string(&message).expect("unable to serialize message");
 
@@ -210,39 +230,18 @@ pub mod frontend {
             unsafe {
                 invoke_webview(message_serialized);
             }
-        }
-
-        /// Create a new message for this service instance's subscription.
-        fn new_message<'a, T: Serialize + Deserialize<'a>>(&self, message: T) -> Message<T> {
-            Message::for_subscription_id(self.subscription_id, message)
-        }
-
-        /// Send a message to the `web-view` backend, receive a future
-        /// for a reply message.
-        pub fn send_message<
-            'a,
-            IN: Serialize + Deserialize<'a>,
-            OUT: Serialize + Deserialize<'a>,
-        >(
-            &self,
-            message: IN,
-        ) -> MessageFuture<OUT> {
-            let message = self.new_message(message);
-            let message_res = self.new_result_future(message.message_id);
-
-            Self::send_message_to_webview(message);
 
             message_res
         }
     }
 
     /// A message that will be received in the future.
-    pub struct MessageFuture<T> {
-        message: Arc<RwLock<WakerMessage>>,
-        return_type: PhantomData<T>,
+    pub struct MessageFuture<RECV> {
+        message: Arc<RwLock<WakerMessage<RECV>>>,
+        return_type: PhantomData<RECV>,
     }
 
-    impl<T> MessageFuture<T> {
+    impl<RECV> MessageFuture<RECV> {
         pub fn new() -> Self {
             Self {
                 message: Arc::new(RwLock::new(WakerMessage::default())),
@@ -251,8 +250,8 @@ pub mod frontend {
         }
     }
 
-    impl<T: DeserializeOwned> Future for MessageFuture<T> {
-        type Output = T;
+    impl<RECV: DeserializeOwned> Future for MessageFuture<RECV> {
+        type Output = Arc<RECV>;
 
         fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
             let mut waker_message = self.message.write().expect("unable to obtain RwLock on message");
@@ -263,9 +262,7 @@ pub mod frontend {
             }
 
             let message = waker_message.message.as_ref().expect("unable to obtain reference to message in WakerMessage");
-            let result = serde_json::from_value(message.clone());
-            let value = result.expect("unable to deserialize message");
-            Poll::Ready(value)
+            Poll::Ready(message.clone())
         }
     }
 
@@ -287,10 +284,11 @@ pub mod frontend {
     /// the reply message using the provided `map` to the component's
     /// `Component::Message` type, and forward it to the component via
     /// the provided `link`.
-    pub fn send_future_map<COMP: Component, F, T, M>(link: &ComponentLink<COMP>, future: F, map: M)
+    pub fn send_future_map<COMP: Component, FUT, FUTMSG, MAP, M>(link: &ComponentLink<COMP>, future: FUT, map: MAP)
     where
-        F: Future<Output = T> + 'static,
-        M: Fn(T) -> COMP::Message + 'static,
+        FUT: Future<Output = FUTMSG> + 'static,
+        M: Into<COMP::Message>,
+        MAP: Fn(FUTMSG) -> M + 'static,
     {
         let link = link.clone();
         spawn_local(async move {
