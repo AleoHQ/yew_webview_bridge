@@ -46,12 +46,12 @@ extern "C" {
 /// The waker and the message data for a given message id. When these
 /// are set to `Some`, the `Future` waiting for the message will poll
 /// `Ready`.
-struct WakerMessage<T> {
+struct WakerMessage<RECV> {
     pub waker: Option<Waker>,
-    pub message: Option<Arc<T>>,
+    pub message: Option<Arc<RECV>>,
 }
 
-impl<T> WakerMessage<T> {
+impl<RECV> WakerMessage<RECV> {
     pub fn new() -> Self {
         WakerMessage {
             waker: None,
@@ -60,7 +60,7 @@ impl<T> WakerMessage<T> {
     }
 }
 
-impl<T> Default for WakerMessage<T> {
+impl<RECV> Default for WakerMessage<RECV> {
     fn default() -> Self {
         Self::new()
     }
@@ -308,13 +308,19 @@ pub mod backend {
     use web_view::WebView;
 
     /// Handle a `web-view` message as a message coming from `yew`.
-    /// 
+    ///
+    /// + `<RECV>` is the type of message being received from a
+    ///   `WebViewMessageService` in the frontend.
+    /// + `<SND>` is the type of message expected by the
+    ///   `WebViewMessageService` in the frontend, in the reply to the
+    ///   `RECV` message.
+    ///
     /// # Example
-    /// 
+    ///
     /// ```no_run
     /// use yew_webview_bridge::backend::handle_yew_message;
     /// use web_view;
-    /// 
+    ///
     /// web_view::builder()
     ///     .content(web_view::Content::Html("<html></html>"))
     ///     .user_data(())
@@ -329,15 +335,15 @@ pub mod backend {
     pub fn handle_yew_message<
         'a,
         T,
-        IN: Deserialize<'a> + Serialize,
-        OUT: Deserialize<'a> + Serialize,
-        H: Fn(IN) -> Option<OUT>,
+        RECV: Deserialize<'a> + Serialize,
+        SND: Deserialize<'a> + Serialize,
+        H: Fn(RECV) -> Option<SND>,
     >(
         webview: &mut WebView<T>,
         arg: &'a str,
         handler: H,
     ) {
-        let in_message: Message<IN> = serde_json::from_str(&arg)
+        let in_message: Message<RECV> = serde_json::from_str(&arg)
             .expect("unable to deserialize message from json string");
 
         let output = handler(in_message.inner);
