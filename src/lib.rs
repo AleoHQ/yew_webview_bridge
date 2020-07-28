@@ -280,6 +280,22 @@ pub mod frontend {
             link.send_message(future.await);
         });
     }
+
+    /// Send a future which is expected to recieve a reply message
+    /// when it is ready. When the message is received, it will map
+    /// the reply message using the provided `map` to the component's
+    /// `Component::Message` type, and forward it to the component via
+    /// the provided `link`.
+    pub fn send_future_map<COMP: Component, F, T, M>(link: &ComponentLink<COMP>, future: F, map: M)
+    where
+        F: Future<Output = T> + 'static,
+        M: Fn(T) -> COMP::Message + 'static,
+    {
+        let link = link.clone();
+        spawn_local(async move {
+            link.send_message((map)(future.await));
+        });
+    }
 }
 
 #[cfg(feature = "backend")]
