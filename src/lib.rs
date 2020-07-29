@@ -283,16 +283,19 @@ pub mod frontend {
     /// when it is ready. When the message is received, it will map
     /// the reply message using the provided `map` to the component's
     /// `Component::Message` type, and forward it to the component via
-    /// the provided `link`.
+    /// the provided `link`. If the map returns `None`, no message 
+    /// will be sent to the component.
     pub fn send_future_map<COMP: Component, FUT, FUTMSG, MAP, M>(link: &ComponentLink<COMP>, future: FUT, map: MAP)
     where
         FUT: Future<Output = FUTMSG> + 'static,
         M: Into<COMP::Message>,
-        MAP: Fn(FUTMSG) -> M + 'static,
+        MAP: Fn(FUTMSG) -> Option<M> + 'static,
     {
         let link = link.clone();
         spawn_local(async move {
-            link.send_message((map)(future.await));
+            if let Some(msg) = (map)(future.await) {
+                link.send_message(msg);
+            }
         });
     }
 }
