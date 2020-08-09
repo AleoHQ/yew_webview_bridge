@@ -332,6 +332,17 @@ pub mod backend {
     pub use super::Message;
     use serde::{Deserialize, Serialize};
     use web_view::WebView;
+    use thiserror::Error;
+
+    #[derive(Error, Debug)]
+    pub enum YewWebviewBridgeError {
+        #[error("Unable to serialize outgoing message to json string: {0}")]
+        UnableToSerialize(serde_json::Error),
+        #[error("Unable to deserialize incoming json string: {0}")]
+        UnableToDeserialize(serde_json::Error),
+        #[error("Failed to dispatch message to frontend.")]
+        FieldToDispatch(#[from] web_view::Error),
+    }
 
     /// Handle a `web-view` message as a message coming from `yew`.
     ///
@@ -368,9 +379,9 @@ pub mod backend {
         webview: &mut WebView<T>,
         arg: &'a str,
         handler: H,
-    ) {
+    ) -> Result<(), YewWebviewBridgeError> {
         let in_message: Message<RECV> =
-            serde_json::from_str(&arg).expect("unable to deserialize message from json string");
+            serde_json::from_str(&arg).map_err(|err| YewWebviewBridgeError::UnableToDeserialize(err))?;
 
         let output = handler(in_message.inner);
         if let Some(response) = output {
@@ -380,15 +391,17 @@ pub mod backend {
                 inner: response,
             };
 
-            send_response_to_yew(webview, out_message);
+            send_response_to_yew(webview, out_message)?;
         }
+
+        Ok(())
     }
 
     /// Send a response a [Message](Message) recieved from the frontend via
     /// `web-view`'s `eval()` method.
-    fn send_response_to_yew<T, M: Serialize>(webview: &mut WebView<T>, message: Message<M>) {
+    pub fn send_response_to_yew<T, M: Serialize>(webview: &mut WebView<T>, message: Message<M>) -> Result<(), YewWebviewBridgeError> {
         let message_string =
-            serde_json::to_string(&message).expect("unable to serialize message to json string");
+            serde_json::to_string(&message).map_err(|err| YewWebviewBridgeError::UnableToSerialize(err))?;
         let eval_script = format!(
             r#"
         document.dispatchEvent(
@@ -397,8 +410,10 @@ pub mod backend {
             event_name = "yew-webview-bridge-response",
             message = message_string
         );
+        
         webview
-            .eval(&eval_script)
-            .expect("failed to dispatch event to yew");
+            .eval(&eval_script)?;
+
+        Ok(())
     }
 }
