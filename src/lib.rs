@@ -78,12 +78,10 @@ pub mod frontend {
     use std::future::Future;
     use std::marker::PhantomData;
     use std::pin::Pin;
-    use std::sync::{Arc, RwLock, atomic::{Ordering, AtomicBool}};
+    use std::sync::{Arc, RwLock};
     use std::task::{Context, Poll};
     use wasm_bindgen::{prelude::Closure, JsCast, JsValue};
-    use wasm_bindgen_futures::spawn_local;
     use web_sys::{CustomEvent, Document, EventListener, Window};
-    use yew::prelude::{Component, ComponentLink};
 
     /// A map of message ids
     /// ([Message#message_id](Message#message_id)), to the `Waker` for
@@ -284,42 +282,6 @@ pub mod frontend {
                 .expect("unable to obtain reference to message in WakerMessage");
             Poll::Ready(message.clone())
         }
-    }
-
-    /// Send a future which is expected to recieve a reply message when
-    /// it is ready, and forward the reply message to the specified
-    /// component when it is received.
-    pub fn send_future<COMP: Component, F>(link: &ComponentLink<COMP>, future: F)
-    where
-        F: Future<Output = COMP::Message> + 'static,
-    {
-        let link = link.clone();
-        spawn_local(async move {
-            link.send_message(future.await);
-        });
-    }
-
-    /// Send a future which is expected to recieve a reply message
-    /// when it is ready. When the message is received, it will map
-    /// the reply message using the provided `map` to the component's
-    /// `Component::Message` type, and forward it to the component via
-    /// the provided `link`. If the map returns `None`, no message
-    /// will be sent to the component.
-    pub fn send_future_map<COMP: Component, FUT, FUTMSG, MAP, M>(
-        link: &ComponentLink<COMP>,
-        future: FUT,
-        map: MAP,
-    ) where
-        FUT: Future<Output = FUTMSG> + 'static,
-        M: Into<COMP::Message>,
-        MAP: Fn(FUTMSG) -> Option<M> + 'static,
-    {
-        let link = link.clone();
-        spawn_local(async move {
-            if let Some(msg) = (map)(future.await) {
-                link.send_message(msg);
-            }
-        });
     }
 }
 
