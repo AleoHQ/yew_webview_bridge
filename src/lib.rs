@@ -194,8 +194,13 @@ pub mod frontend {
             let message_str: String = detail
                 .as_string()
                 .expect("expected event detail to be a String");
-            let message: Message<R> =
-                serde_json::from_str(&message_str).expect("unable to parse json from string");
+            let message: Message<R> = match serde_json::from_str(&message_str) {
+                Ok(message) => message,
+                Err(error) => panic!(
+                    "Error while parsing message: {}. Message contents: {}",
+                    error, &message_str
+                ),
+            };
 
             if message.subscription_id != subscription_id {
                 return;
@@ -304,8 +309,8 @@ pub mod backend {
 
     pub use super::Message;
     use serde::{Deserialize, Serialize};
-    use web_view::WebView;
     use thiserror::Error;
+    use web_view::WebView;
 
     #[derive(Error, Debug)]
     pub enum YewWebviewBridgeError {
@@ -353,8 +358,8 @@ pub mod backend {
         arg: &'a str,
         handler: H,
     ) -> Result<(), YewWebviewBridgeError> {
-        let in_message: Message<RECV> =
-            serde_json::from_str(&arg).map_err(|err| YewWebviewBridgeError::UnableToDeserialize(err))?;
+        let in_message: Message<RECV> = serde_json::from_str(&arg)
+            .map_err(|err| YewWebviewBridgeError::UnableToDeserialize(err))?;
 
         let output = handler(in_message.inner);
         if let Some(response) = output {
@@ -372,9 +377,12 @@ pub mod backend {
 
     /// Send a response a [Message](Message) recieved from the frontend via
     /// `web-view`'s `eval()` method.
-    pub fn send_response_to_yew<T, M: Serialize>(webview: &mut WebView<T>, message: Message<M>) -> Result<(), YewWebviewBridgeError> {
-        let message_string =
-            serde_json::to_string(&message).map_err(|err| YewWebviewBridgeError::UnableToSerialize(err))?;
+    pub fn send_response_to_yew<T, M: Serialize>(
+        webview: &mut WebView<T>,
+        message: Message<M>,
+    ) -> Result<(), YewWebviewBridgeError> {
+        let message_string = serde_json::to_string(&message)
+            .map_err(|err| YewWebviewBridgeError::UnableToSerialize(err))?;
         let eval_script = format!(
             r#"
         document.dispatchEvent(
@@ -383,9 +391,8 @@ pub mod backend {
             event_name = "yew-webview-bridge-response",
             message = message_string
         );
-        
-        webview
-            .eval(&eval_script)?;
+
+        webview.eval(&eval_script)?;
 
         Ok(())
     }
