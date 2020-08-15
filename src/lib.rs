@@ -14,13 +14,24 @@ pub struct Message<T> {
 }
 
 impl<T> Message<T> {
+    /// Generate a new subscription id.
     pub fn generate_subscription_id() -> u32 {
-        rand::thread_rng().gen()
+        // TODO: revert if required This is now using OsRng instead of
+        // ThreadRng due to a spurious crash in rand
+        // https://github.com/rust-random/rand/issues/1016
+        //
+        // Using OsRng here may be a performance regression, due to a
+        // need to shell out to javascript to obtain the value. I may
+        // switch to using StdRng in a lazy_static instance instead
+        // for a while after this to see if that will solve the issue.
+        rand::rngs::OsRng.gen()
     }
 
     /// Generate a new message id.
     pub fn generate_message_id() -> u32 {
-        rand::thread_rng().gen()
+        // TODO: revert if required.
+        // See generate_subscription_id() for more information.
+        rand::rngs::OsRng.gen()
     }
 
     /// Create a message for the provided subscription id.
