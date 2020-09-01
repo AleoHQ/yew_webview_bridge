@@ -26,9 +26,10 @@ js-sys = { version = "0.3", optional = true }
 
 # backend
 web-view = { version = "0.6", optional = true }
+tungstenite = { version = "0.11", optional = true }
 
 [features]
 default = []
 
 frontend = ["yew", "wasm-bindgen-futures", "wasm-bindgen", "dashmap", "web-sys", "js-sys"]
-backend = ["web-view"]
+backend = ["web-view", "tungstenite"]
