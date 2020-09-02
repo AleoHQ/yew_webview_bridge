@@ -44,15 +44,6 @@ impl<T> Message<T> {
     }
 }
 
-#[cfg(feature = "frontend")]
-use wasm_bindgen::prelude::wasm_bindgen;
-
-#[cfg(feature = "frontend")]
-#[wasm_bindgen(module = "/src/js/invoke_webview.js")]
-extern "C" {
-    fn invoke_webview(message: String);
-}
-
 /// The waker and the message data for a given message id. When these
 /// are set to `Some`, the `Future` waiting for the message will poll
 /// `Ready`.

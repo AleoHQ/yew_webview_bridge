@@ -3,7 +3,7 @@
 //! to WASM, and running in `web-view`.
 
 pub use super::Message;
-use crate::{invoke_webview, WakerMessage};
+use crate::WakerMessage;
 use dashmap::DashMap;
 use serde::{de::DeserializeOwned, Serialize};
 use std::future::Future;
@@ -11,8 +11,19 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
-use wasm_bindgen::{prelude::Closure, JsCast, JsValue};
+use wasm_bindgen::{prelude::{Closure, wasm_bindgen}, JsCast, JsValue};
 use web_sys::{CustomEvent, Document, EventListener, Window};
+
+#[wasm_bindgen(module = "/src/js/invoke_webview.js")]
+extern "C" {
+    fn invoke_webview(message: String);
+}
+
+#[wasm_bindgen(module = "/src/js/invoke_webview_exists.js")]
+extern "C" {
+    fn invoke_webview_exists() -> bool;
+}
+
 
 /// A map of message ids
 /// ([Message#message_id](Message#message_id)), to the `Waker` for
@@ -22,6 +33,15 @@ use web_sys::{CustomEvent, Document, EventListener, Window};
 type MessageFuturesMap<RECV> = Arc<DashMap<u32, Arc<RwLock<WakerMessage<RECV>>>>>;
 
 static LISTENER_TYPE: &'static str = "yew-webview-bridge-response";
+
+enum BridgeType {
+    Webview(WebviewListenerData),
+    Websocket,
+}
+struct WebviewListenerData {
+    event_listener: EventListener,
+    _event_listener_closure: Closure<dyn Fn(CustomEvent)>,
+}
 
 /// This is a service that can be used within a `yew` `Component`
 /// to communicate with the backend which is hosting the
@@ -36,8 +56,7 @@ pub struct WebViewMessageService<RECV, SND> {
     /// A unique identifier for the messages communicating with this service.
     subscription_id: u32,
     message_futures_map: MessageFuturesMap<RECV>,
-    event_listener: EventListener,
-    _event_listener_closure: Closure<dyn Fn(CustomEvent)>,
+    bridge_type_data: BridgeType,
     _receive_message_type: PhantomData<SND>,
 }
 
@@ -54,13 +73,15 @@ where
 impl<RECV, SND> Drop for WebViewMessageService<RECV, SND> {
     /// Removes the event listener.
     fn drop(&mut self) {
-        let window: Window = web_sys::window().expect("unable to obtain current Window");
-        let document: Document = window
-            .document()
-            .expect("unable to obtain current Document");
-        document
-            .remove_event_listener_with_event_listener(LISTENER_TYPE, &self.event_listener)
-            .expect("unable to remove yew-webview-bridge-response listener");
+        if let BridgeType::Webview(data) = &self.bridge_type_data {
+            let window: Window = web_sys::window().expect("unable to obtain current Window");
+            let document: Document = window
+                .document()
+                .expect("unable to obtain current Document");
+            document
+                .remove_event_listener_with_event_listener(LISTENER_TYPE, &data.event_listener)
+                .expect("unable to remove yew-webview-bridge-response listener");
+        }
     }
 }
 
@@ -71,8 +92,29 @@ where
 {
     pub fn new() -> Self {
         let subscription_id = Message::<()>::generate_subscription_id();
-        let message_futures_map = Arc::new(DashMap::new());
+        let message_futures_map = MessageFuturesMap::default();
 
+        #[allow(unused_unsafe)]
+        let using_webview = unsafe { invoke_webview_exists() };
+
+
+        log::debug!("using_webview: {}", using_webview);
+
+        let bridge_type_data = if using_webview {
+            BridgeType::Webview(Self::webview_listener_data(&message_futures_map, subscription_id))
+        } else {
+            BridgeType::Websocket
+        };
+
+        Self {
+            subscription_id,
+            message_futures_map,
+            bridge_type_data,
+            _receive_message_type: PhantomData,
+        }
+    }
+
+    fn webview_listener_data(message_futures_map: &MessageFuturesMap<RECV>, subscription_id: u32) -> WebviewListenerData {
         let window: Window = web_sys::window().expect("unable to obtain current Window");
         let document: Document = window
             .document()
@@ -91,12 +133,10 @@ where
             .add_event_listener_with_event_listener(LISTENER_TYPE, &listener)
             .expect("unable to register yew-webview-bridge-response callback");
 
-        Self {
-            subscription_id,
-            message_futures_map,
+
+        WebviewListenerData {
             event_listener: listener,
             _event_listener_closure: closure,
-            _receive_message_type: PhantomData,
         }
     }
 
@@ -168,10 +208,12 @@ where
         let message_serialized =
             serde_json::to_string(&message).expect("unable to serialize message");
 
-        #[allow(unused_unsafe)]
-        unsafe {
-            invoke_webview(message_serialized);
-        }
+        if let BridgeType::Webview(_) = self.bridge_type_data {
+            #[allow(unused_unsafe)]
+            unsafe {
+                invoke_webview(message_serialized);
+            }
+        }        
 
         message_res
     }
