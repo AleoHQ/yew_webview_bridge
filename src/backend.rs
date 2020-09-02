@@ -92,7 +92,7 @@ pub fn send_response_to_yew<T, M: Serialize>(
     Ok(())
 }
 
-pub fn websocket_bridge_listen<'a, RECV, SND, H>(listener: TcpListener, handler: H)
+pub fn run_websocket_bridge<'a, RECV, SND, H>(listener: TcpListener, message_handler: H)
 where
     RECV: DeserializeOwned + Serialize,
     SND: Deserialize<'a> + Serialize,
@@ -102,7 +102,7 @@ where
     // that should scale well enough for debug purposes, where the
     // expected number of connections is 1.
     for connection in listener.incoming() {
-        let thread_handler = handler.clone();
+        let thread_message_handler = message_handler.clone();
         std::thread::spawn(move || {
             let connection = match connection {
                 Ok(connection) => connection,
@@ -150,7 +150,7 @@ where
                             }
                         };
 
-                        let snd = match thread_handler(recv) {
+                        let snd = match thread_message_handler(recv) {
                             Some(snd) => snd,
                             None => {
                                 continue 'read_messages;
