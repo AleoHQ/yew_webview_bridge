@@ -19,7 +19,7 @@ use wasm_bindgen::{
     prelude::{wasm_bindgen, Closure},
     JsCast, JsValue,
 };
-use web_sys::{CustomEvent, Document, EventListener, WebSocket, Window};
+use web_sys::{CustomEvent, Document, EventListener, WebSocket, Window, MessageEvent};
 
 #[wasm_bindgen(module = "/src/js/invoke_webview.js")]
 extern "C" {
@@ -136,7 +136,11 @@ where
         let listener_futures_map = message_futures_map.clone();
         let closure: Closure<dyn Fn(CustomEvent)> =
             Closure::wrap(Box::new(move |event: CustomEvent| {
-                response_handler::<RECV>(subscription_id, listener_futures_map.clone(), event);
+                let detail: JsValue = event.detail();
+                let message_string: String = detail
+                    .as_string()
+                    .expect("expected event detail to be a String");
+                response_handler::<RECV>(subscription_id, &listener_futures_map, &message_string);
             }));
 
         let mut listener = EventListener::new();
@@ -257,7 +261,8 @@ where
     }
 }
 struct WebsocketMessageService<RECV, SND> {
-    message_data: Arc<WebsocketSendMessageData<RECV, SND>>,
+    callback_data: Arc<WebsocketSendMessageData<RECV, SND>>,
+    _onmessage_callback: Closure<dyn FnMut(MessageEvent)>,
     _onopen_callback: Closure<dyn FnMut(JsValue)>,
     _receive_message_type: PhantomData<SND>,
 }
@@ -290,25 +295,42 @@ where
             WebSocket::new(&websocket_address).expect("problem creating web socket");
         let queued: Rc<RefCell<Vec<Message<SND>>>> = Rc::default();
 
-        let message_data = Arc::new(WebsocketSendMessageData {
+        let callback_data = Arc::new(WebsocketSendMessageData {
             websocket: ws,
             subscription_id,
             queued,
             message_futures_map: message_futures_map.clone(),
         });
 
-        let message_data_onopen = message_data.clone();
+
+        let onopen_data = callback_data.clone();
         let onopen_callback = Closure::wrap(Box::new(move |_| {
             log::debug!("websocket opened");
-            message_data_onopen.send_queue();
+            onopen_data.send_queue();
         }) as Box<dyn FnMut(JsValue)>);
-
-        message_data
+        callback_data
             .websocket
             .set_onopen(Some(onopen_callback.as_ref().unchecked_ref()));
 
+        let onmessage_data = callback_data.clone();
+        let onmessage_callback = Closure::wrap(Box::new(move |event: MessageEvent| {
+            // Handle difference Text/Binary,...
+            if let Ok(message) = event.data().dyn_into::<js_sys::JsString>() {
+                let message_string: String = message.into();
+
+                response_handler::<RECV>(
+                    onmessage_data.subscription_id, 
+                    &onmessage_data.message_futures_map, 
+                    &message_string);
+            } else {
+                log::error!("message event, received Unknown: {:?}", event.data());
+            }
+        }) as Box<dyn FnMut(MessageEvent)>);
+        callback_data.websocket.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
+
         Self {
-            message_data,
+            callback_data,
+            _onmessage_callback: onmessage_callback,
             _onopen_callback: onopen_callback,
             _receive_message_type: PhantomData,
         }
@@ -318,7 +340,7 @@ where
 impl<RECV, SND> Drop for WebsocketMessageService<RECV, SND> {
     /// Removes the event listener.
     fn drop(&mut self) {
-        if let Err(error) = self.message_data.websocket.close_with_code(1000) {
+        if let Err(error) = self.callback_data.websocket.close_with_code(1000) {
             log::error!(target: "yew_webview_bridge", "Error while closing websocket: {:?}", error)
         }
     }
@@ -330,7 +352,7 @@ where
     RECV: DeserializeOwned,
 {
     fn send_message(&self, message: SND) -> MessageFuture<RECV> {
-        self.message_data.send_message(message)
+        self.callback_data.send_message(message)
     }
 }
 
@@ -339,20 +361,16 @@ where
 /// future (with matching message id), if there are any.
 fn response_handler<R>(
     subscription_id: u32,
-    message_futures_map: MessageFuturesMap<R>,
-    event: CustomEvent,
+    message_futures_map: &MessageFuturesMap<R>,
+    message_str: &str,
 ) where
     R: DeserializeOwned,
 {
-    let detail: JsValue = event.detail();
-    let message_str: String = detail
-        .as_string()
-        .expect("expected event detail to be a String");
-    let message: Message<R> = match serde_json::from_str(&message_str) {
+    let message: Message<R> = match serde_json::from_str(message_str) {
         Ok(message) => message,
         Err(error) => panic!(
             "Error while parsing message: {}. Message contents: {}",
-            error, &message_str
+            error, message_str
         ),
     };
 
