@@ -3,8 +3,8 @@
 //! `web-view` window.
 
 pub use super::Message;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use std::net::TcpListener;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::{fmt::Debug, net::TcpListener};
 use thiserror::Error;
 use web_view::WebView;
 
@@ -94,7 +94,7 @@ pub fn send_response_to_yew<T, M: Serialize>(
 
 pub fn run_websocket_bridge<'a, RECV, SND, H>(listener: TcpListener, message_handler: H)
 where
-    RECV: DeserializeOwned + Serialize,
+    RECV: DeserializeOwned + Serialize + Debug,
     SND: Deserialize<'a> + Serialize,
     H: Fn(RECV) -> Option<SND> + Send + Clone + 'static,
 {
@@ -125,6 +125,8 @@ where
                 }
             };
 
+            log::debug!("Successfully connected");
+
             'read_messages: loop {
                 let msg = match websocket.read_message() {
                     Ok(msg) => msg,
@@ -149,6 +151,8 @@ where
                                 continue 'read_messages;
                             }
                         };
+
+                        log::debug!("Successfully received message: {:?}", recv);
 
                         let snd = match thread_message_handler(recv) {
                             Some(snd) => snd,
