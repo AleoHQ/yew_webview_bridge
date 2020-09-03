@@ -108,7 +108,6 @@ where
                 Ok(connection) => connection,
                 Err(error) => {
                     log::error!(
-                        target: "yew_webview_bridge::websocket_bridge",
                         "Error during connection: {}",
                         error);
                     return;
@@ -118,7 +117,6 @@ where
                 Ok(websocket) => websocket,
                 Err(error) => {
                     log::error!(
-                        target: "yew_webview_bridge::websocket_bridge",
                         "Error during handshake: {}",
                         error);
                     return;
@@ -132,7 +130,6 @@ where
                     Ok(msg) => msg,
                     Err(error) => {
                         log::error!(
-                            target: "yew_webview_bridge::websocket_bridge", 
                             "Error reading received message: {}", 
                             error);
                         continue 'read_messages;
@@ -141,31 +138,35 @@ where
 
                 match msg {
                     tungstenite::Message::Text(message_string) => {
-                        let recv: RECV = match serde_json::from_str(&message_string) {
+                        let in_message: Message<RECV> = match serde_json::from_str(&message_string) {
                             Ok(recv) => recv,
                             Err(error) => {
                                 log::error!(
-                                    target: "yew_webview_bridge::websocket_bridge", 
                                     "Error deserializing received message: {}", 
                                     error);
                                 continue 'read_messages;
                             }
                         };
 
-                        log::debug!("Successfully received message: {:?}", recv);
+                        log::debug!("Successfully received message: {:?}", in_message);
 
-                        let snd = match thread_message_handler(recv) {
-                            Some(snd) => snd,
+                        let response = match thread_message_handler(in_message.inner) {
+                            Some(response) => response,
                             None => {
                                 continue 'read_messages;
                             }
                         };
 
-                        let send_string = match serde_json::to_string(&snd) {
+                        let out_message = Message {
+                            subscription_id: in_message.subscription_id,
+                            message_id: in_message.message_id,
+                            inner: response,
+                        };
+
+                        let send_string = match serde_json::to_string(&out_message) {
                             Ok(string) => string,
                             Err(error) => {
                                 log::error!(
-                                    target: "yew_webview_bridge::websocket_bridge", 
                                     "Error serializing reply message: {}", 
                                     error);
                                 continue 'read_messages;
@@ -178,7 +179,6 @@ where
                             Ok(_) => {}
                             Err(error) => {
                                 log::error!(
-                                        target: "yew_webview_bridge::websocket_bridge", 
                                         "Error writing reply message: {}", 
                                         error);
                             }
