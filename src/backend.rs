@@ -3,11 +3,8 @@
 //! `web-view` window.
 
 pub use super::Message;
-use async_std::{sync::Mutex, task};
-use future::Future;
-use futures_util::{future, SinkExt, StreamExt};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::{fmt::Debug, pin::Pin, sync::Arc};
+use serde::{Deserialize, Serialize};
+use std::fmt::Debug;
 use thiserror::Error;
 use web_view::WebView;
 
@@ -98,19 +95,23 @@ pub fn send_response_to_yew<T, M: Serialize>(
 /// An async version of [run_websocket_bridge], using the `async-std`
 /// runtime. `concurrent_limit` is an optional limit on the number of
 /// messages that can be handled concurrently for a given connection.
+#[cfg(feature = "async-websocket")]
 pub async fn run_websocket_bridge_async<'a, RECV, SND, H>(
     concurrent_limit: impl Into<Option<usize>>,
     listener: async_std::net::TcpListener,
     message_handler: H,
 ) where
-    RECV: DeserializeOwned + Debug + Send + 'static,
+    RECV: serde::de::DeserializeOwned + Debug + Send + 'static,
     SND: Serialize + Send + 'static,
-    H: Fn(RECV) -> Pin<Box<dyn Future<Output = Option<SND>> + Send>>
+    H: Fn(RECV) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<SND>> + Send>>
         + Send
         + Sync
         + Clone
         + 'static,
 {
+    use async_std::{sync::Mutex, task};
+    use futures_util::{SinkExt, StreamExt};
+
     let concurrent_limit: Option<usize> = concurrent_limit.into();
     'connections: loop {
         let (connection, _address) = match listener.accept().await {
@@ -132,7 +133,7 @@ pub async fn run_websocket_bridge_async<'a, RECV, SND, H>(
             };
 
             let (ws_out, ws_in) = ws_stream.split();
-            let ws_out = Arc::new(Mutex::new(ws_out));
+            let ws_out = std::sync::Arc::new(Mutex::new(ws_out));
 
             let ws_in_msg_handler = conn_msg_handler.clone();
             ws_in
@@ -211,10 +212,11 @@ pub async fn run_websocket_bridge_async<'a, RECV, SND, H>(
 /// Run a websocket server that handles messages using the provided
 /// `message_handler`. Connections are handled in parallel, but
 /// messages per connection are currently handled synchronously.
+#[cfg(feature = "websocket")]
 pub fn run_websocket_bridge<'a, RECV, SND, H>(listener: std::net::TcpListener, message_handler: H)
 where
-    RECV: DeserializeOwned + Serialize + Debug,
-    SND: Deserialize<'a> + Serialize,
+    RECV: serde::de::DeserializeOwned + Serialize + Debug,
+    SND: Serialize,
     H: Fn(RECV) -> Option<SND> + Send + Clone + 'static,
 {
     // For each incoming connection spawn a new thread to handle it.
