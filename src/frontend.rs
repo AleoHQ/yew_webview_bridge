@@ -19,7 +19,7 @@ use wasm_bindgen::{
     prelude::{wasm_bindgen, Closure},
     JsCast, JsValue,
 };
-use web_sys::{CustomEvent, Document, EventListener, WebSocket, Window, MessageEvent};
+use web_sys::{CustomEvent, Document, EventListener, MessageEvent, WebSocket, Window};
 
 #[wasm_bindgen(module = "/src/js/invoke_webview.js")]
 extern "C" {
@@ -302,7 +302,6 @@ where
             message_futures_map: message_futures_map.clone(),
         });
 
-
         let onopen_data = callback_data.clone();
         let onopen_callback = Closure::wrap(Box::new(move |_| {
             log::debug!("websocket opened");
@@ -319,14 +318,17 @@ where
                 let message_string: String = message.into();
 
                 response_handler::<RECV>(
-                    onmessage_data.subscription_id, 
-                    &onmessage_data.message_futures_map, 
-                    &message_string);
+                    onmessage_data.subscription_id,
+                    &onmessage_data.message_futures_map,
+                    &message_string,
+                );
             } else {
                 log::error!("message event, received Unknown: {:?}", event.data());
             }
         }) as Box<dyn FnMut(MessageEvent)>);
-        callback_data.websocket.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
+        callback_data
+            .websocket
+            .set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
 
         Self {
             callback_data,

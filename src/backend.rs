@@ -3,13 +3,13 @@
 //! `web-view` window.
 
 pub use super::Message;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::{pin::Pin, fmt::Debug, sync::Arc};
-use thiserror::Error;
-use web_view::WebView;
-use futures_util::{StreamExt, future, SinkExt};
 use async_std::{sync::Mutex, task};
 use future::Future;
+use futures_util::{future, SinkExt, StreamExt};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::{fmt::Debug, pin::Pin, sync::Arc};
+use thiserror::Error;
+use web_view::WebView;
 
 #[derive(Error, Debug)]
 pub enum YewWebviewBridgeError {
@@ -98,11 +98,19 @@ pub fn send_response_to_yew<T, M: Serialize>(
 /// An async version of [run_websocket_bridge], using the `async-std`
 /// runtime. `concurrent_limit` is an optional limit on the number of
 /// messages that can be handled concurrently for a given connection.
-pub async fn run_websocket_bridge_async<'a, RECV, SND, H>(concurrent_limit: impl Into<Option<usize>>, listener: async_std::net::TcpListener, message_handler: H) 
-where
+pub async fn run_websocket_bridge_async<'a, RECV, SND, H>(
+    concurrent_limit: impl Into<Option<usize>>,
+    listener: async_std::net::TcpListener,
+    message_handler: H,
+) where
     RECV: DeserializeOwned + Debug + Send + 'static,
     SND: Serialize + Send + 'static,
-    H: Fn(RECV) -> Pin<Box<dyn Future<Output = Option<SND>> + Send>> + Send + Sync + Clone + 'static, {
+    H: Fn(RECV) -> Pin<Box<dyn Future<Output = Option<SND>> + Send>>
+        + Send
+        + Sync
+        + Clone
+        + 'static,
+{
     let concurrent_limit: Option<usize> = concurrent_limit.into();
     'connections: loop {
         let (connection, _address) = match listener.accept().await {
@@ -127,73 +135,75 @@ where
             let ws_out = Arc::new(Mutex::new(ws_out));
 
             let ws_in_msg_handler = conn_msg_handler.clone();
-            ws_in.for_each_concurrent(concurrent_limit, move |msg_result| {
-                let fut_msg_handler = ws_in_msg_handler.clone();
-                let fut_ws_out = ws_out.clone();
-                async move {
-                    let msg = match msg_result {
-                        Ok(msg) => msg,
-                        Err(error) => {
-                            log::error!("Error reading received message: {}", error);
-                            return;
-                        }
-                    };
+            ws_in
+                .for_each_concurrent(concurrent_limit, move |msg_result| {
+                    let fut_msg_handler = ws_in_msg_handler.clone();
+                    let fut_ws_out = ws_out.clone();
+                    async move {
+                        let msg = match msg_result {
+                            Ok(msg) => msg,
+                            Err(error) => {
+                                log::error!("Error reading received message: {}", error);
+                                return;
+                            }
+                        };
 
-                    match msg {
-                        tungstenite::Message::Text(message_string) => {
-                            let task_msg_handler = fut_msg_handler.clone();
-                            let de_fut = task::spawn(async move {
-                                serde_json::from_str(&message_string)
-                            }).await;
-    
-                            let in_message: Message<RECV> = match de_fut {
-                                Ok(recv) => recv,
-                                Err(error) => {
-                                    log::error!(
-                                        "Error deserializing received message: {}", 
-                                        error);
-                                    return;
-                                }
-                            };
-    
-                            let response: Option<SND> = task_msg_handler(in_message.inner).await;
-    
-                            let out_message = Message {
-                                subscription_id: in_message.subscription_id,
-                                message_id: in_message.message_id,
-                                inner: response,
-                            };
-    
-                            let send_string = match serde_json::to_string(&out_message) {
-                                Ok(string) => string,
-                                Err(error) => {
-                                    log::error!(
-                                        "Error serializing reply message: {}", 
-                                        error);
-                                    return;
-                                }
-                            };
-    
-                            let msg = tungstenite::Message::Text(send_string);
-    
-                            match fut_ws_out.lock().await.send(msg).await {
-                                Ok(_) => {}
-                                Err(error) => {
-                                    log::error!(
-                                            "Error writing reply message: {}", 
-                                            error);
+                        match msg {
+                            tungstenite::Message::Text(message_string) => {
+                                let task_msg_handler = fut_msg_handler.clone();
+                                let de_fut =
+                                    task::spawn(
+                                        async move { serde_json::from_str(&message_string) },
+                                    )
+                                    .await;
+
+                                let in_message: Message<RECV> = match de_fut {
+                                    Ok(recv) => recv,
+                                    Err(error) => {
+                                        log::error!(
+                                            "Error deserializing received message: {}",
+                                            error
+                                        );
+                                        return;
+                                    }
+                                };
+
+                                let response: Option<SND> =
+                                    task_msg_handler(in_message.inner).await;
+
+                                let out_message = Message {
+                                    subscription_id: in_message.subscription_id,
+                                    message_id: in_message.message_id,
+                                    inner: response,
+                                };
+
+                                let send_string = match serde_json::to_string(&out_message) {
+                                    Ok(string) => string,
+                                    Err(error) => {
+                                        log::error!("Error serializing reply message: {}", error);
+                                        return;
+                                    }
+                                };
+
+                                let msg = tungstenite::Message::Text(send_string);
+
+                                match fut_ws_out.lock().await.send(msg).await {
+                                    Ok(_) => {}
+                                    Err(error) => {
+                                        log::error!("Error writing reply message: {}", error);
+                                    }
                                 }
                             }
-                        }
-                        tungstenite::Message::Binary(_) => {}
-                        tungstenite::Message::Ping(_) => {}
-                        tungstenite::Message::Pong(_) => {}
-                        tungstenite::Message::Close(_) => {
-                            return;
+                            tungstenite::Message::Binary(_) => {}
+                            tungstenite::Message::Ping(_) => {}
+                            tungstenite::Message::Pong(_) => {}
+                            tungstenite::Message::Close(_) => {
+                                return;
+                            }
                         }
                     }
-                }
-            }).await;
+                })
+                .await;
         });
     }
 }
@@ -216,18 +226,14 @@ where
             let connection = match connection {
                 Ok(connection) => connection,
                 Err(error) => {
-                    log::error!(
-                        "Error during connection: {}",
-                        error);
+                    log::error!("Error during connection: {}", error);
                     return;
                 }
             };
             let mut websocket = match tungstenite::accept(connection) {
                 Ok(websocket) => websocket,
                 Err(error) => {
-                    log::error!(
-                        "Error during handshake: {}",
-                        error);
+                    log::error!("Error during handshake: {}", error);
                     return;
                 }
             };
@@ -236,21 +242,18 @@ where
                 let msg = match websocket.read_message() {
                     Ok(msg) => msg,
                     Err(error) => {
-                        log::error!(
-                            "Error reading received message: {}", 
-                            error);
+                        log::error!("Error reading received message: {}", error);
                         continue 'read_messages;
                     }
                 };
 
                 match msg {
                     tungstenite::Message::Text(message_string) => {
-                        let in_message: Message<RECV> = match serde_json::from_str(&message_string) {
+                        let in_message: Message<RECV> = match serde_json::from_str(&message_string)
+                        {
                             Ok(recv) => recv,
                             Err(error) => {
-                                log::error!(
-                                    "Error deserializing received message: {}", 
-                                    error);
+                                log::error!("Error deserializing received message: {}", error);
                                 continue 'read_messages;
                             }
                         };
@@ -271,9 +274,7 @@ where
                         let send_string = match serde_json::to_string(&out_message) {
                             Ok(string) => string,
                             Err(error) => {
-                                log::error!(
-                                    "Error serializing reply message: {}", 
-                                    error);
+                                log::error!("Error serializing reply message: {}", error);
                                 continue 'read_messages;
                             }
                         };
@@ -283,9 +284,7 @@ where
                         match websocket.write_message(msg) {
                             Ok(_) => {}
                             Err(error) => {
-                                log::error!(
-                                        "Error writing reply message: {}", 
-                                        error);
+                                log::error!("Error writing reply message: {}", error);
                             }
                         }
                     }
