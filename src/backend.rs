@@ -4,9 +4,12 @@
 
 pub use super::Message;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::{fmt::Debug, net::TcpListener};
+use std::{pin::Pin, fmt::Debug, sync::Arc};
 use thiserror::Error;
 use web_view::WebView;
+use futures_util::{StreamExt, future, SinkExt};
+use async_std::{sync::Mutex, task};
+use future::Future;
 
 #[derive(Error, Debug)]
 pub enum YewWebviewBridgeError {
@@ -92,7 +95,109 @@ pub fn send_response_to_yew<T, M: Serialize>(
     Ok(())
 }
 
-pub fn run_websocket_bridge<'a, RECV, SND, H>(listener: TcpListener, message_handler: H)
+pub async fn run_websocket_bridge_async<'a, RECV, SND, H>(concurrent_limit: impl Into<Option<usize>>, listener: async_std::net::TcpListener, message_handler: H) 
+where
+    RECV: DeserializeOwned + Debug + Send + 'static,
+    SND: Serialize + Send + 'static,
+    H: Fn(RECV) -> Pin<Box<dyn Future<Output = Option<SND>> + Send>> + Send + Sync + Clone + 'static, {
+    let concurrent_limit: Option<usize> = concurrent_limit.into();
+    'connections: loop {
+        let (connection, _address) = match listener.accept().await {
+            Ok(ok) => ok,
+            Err(error) => {
+                log::error!("Error during connection: {}", error);
+                continue 'connections;
+            }
+        };
+
+        let conn_msg_handler = message_handler.clone();
+        async_std::task::spawn(async move {
+            let ws_stream = match async_tungstenite::accept_async(connection).await {
+                Ok(ws) => ws,
+                Err(error) => {
+                    log::error!("Error during handshake: {}", error);
+                    return;
+                }
+            };
+
+            let (ws_out, ws_in) = ws_stream.split();
+            let ws_out = Arc::new(Mutex::new(ws_out));
+
+            let ws_in_msg_handler = conn_msg_handler.clone();
+            ws_in.for_each_concurrent(concurrent_limit, move |msg_result| {
+                let fut_msg_handler = ws_in_msg_handler.clone();
+                let fut_ws_out = ws_out.clone();
+                async move {
+                    let msg = match msg_result {
+                        Ok(msg) => msg,
+                        Err(error) => {
+                            log::error!("Error reading received message: {}", error);
+                            return;
+                        }
+                    };
+
+                    match msg {
+                        tungstenite::Message::Text(message_string) => {
+                            let task_msg_handler = fut_msg_handler.clone();
+                            let de_fut = task::spawn(async move {
+                                serde_json::from_str(&message_string)
+                            }).await;
+    
+                            let in_message: Message<RECV> = match de_fut {
+                                Ok(recv) => recv,
+                                Err(error) => {
+                                    log::error!(
+                                        "Error deserializing received message: {}", 
+                                        error);
+                                    return;
+                                }
+                            };
+    
+                            log::debug!("Successfully received message: {:?}", in_message);
+    
+                            let response: Option<SND> = task_msg_handler(in_message.inner).await;
+    
+                            let out_message = Message {
+                                subscription_id: in_message.subscription_id,
+                                message_id: in_message.message_id,
+                                inner: response,
+                            };
+    
+                            let send_string = match serde_json::to_string(&out_message) {
+                                Ok(string) => string,
+                                Err(error) => {
+                                    log::error!(
+                                        "Error serializing reply message: {}", 
+                                        error);
+                                    return;
+                                }
+                            };
+    
+                            let msg = tungstenite::Message::Text(send_string);
+    
+                            match fut_ws_out.lock().await.send(msg).await {
+                                Ok(_) => {}
+                                Err(error) => {
+                                    log::error!(
+                                            "Error writing reply message: {}", 
+                                            error);
+                                }
+                            }
+                        }
+                        tungstenite::Message::Binary(_) => {}
+                        tungstenite::Message::Ping(_) => {}
+                        tungstenite::Message::Pong(_) => {}
+                        tungstenite::Message::Close(_) => {
+                            return;
+                        }
+                    }
+                }
+            }).await;
+        });
+    }
+}
+
+pub fn run_websocket_bridge<'a, RECV, SND, H>(listener: std::net::TcpListener, message_handler: H)
 where
     RECV: DeserializeOwned + Serialize + Debug,
     SND: Deserialize<'a> + Serialize,
