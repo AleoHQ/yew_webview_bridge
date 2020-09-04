@@ -15,11 +15,8 @@ use std::{
     rc::Rc,
     task::{Context, Poll},
 };
-use wasm_bindgen::{
-    prelude::Closure,
-    JsCast, JsValue,
-};
-use web_sys::{CustomEvent, Document, EventListener, MessageEvent, WebSocket, Window, External};
+use wasm_bindgen::{prelude::Closure, JsCast, JsValue};
+use web_sys::{CustomEvent, Document, EventListener, External, MessageEvent, WebSocket, Window};
 
 /// Run the `web-view` defined `window.external.invoke()` method.
 pub fn invoke_webview(message: String) {
@@ -41,13 +38,14 @@ pub fn invoke_webview(message: String) {
     let external_value: JsValue = external.into();
     let invoke_property_name = JsValue::from_str("invoke");
     #[allow(unused_unsafe)]
-    let invoke_property = match unsafe { js_sys::Reflect::get(&external_value, &invoke_property_name) } {
-        Ok(prop) => prop,
-        Err(error) => {
-            log::error!("Unable to find external.invoke(): {:?}", error);
-            return;
-        }
-    };
+    let invoke_property =
+        match unsafe { js_sys::Reflect::get(&external_value, &invoke_property_name) } {
+            Ok(prop) => prop,
+            Err(error) => {
+                log::error!("Unable to find external.invoke(): {:?}", error);
+                return;
+            }
+        };
 
     let invoke_fn: js_sys::Function = match invoke_property.dyn_into::<js_sys::Function>() {
         Ok(invoke_fn) => invoke_fn,
@@ -58,7 +56,7 @@ pub fn invoke_webview(message: String) {
     };
 
     let message_value = JsValue::from_str(&message);
-    
+
     if let Err(error) = invoke_fn.call1(&JsValue::NULL, &message_value) {
         log::error!("Error while calling window.invoke(): {:?}", error);
         return;
@@ -89,11 +87,14 @@ pub fn invoke_webview_exists() -> bool {
     match unsafe { js_sys::Reflect::has(&external_value, &invoke_property_name) } {
         Ok(exists) => {
             log::debug!("Successfully checked external.invoke(), exists: {}", exists);
-            return exists;
-        },
+            exists
+        }
         Err(error) => {
-            log::error!("Error checking whether external.invoke() exists: {:?}", error);
-            return false;
+            log::error!(
+                "Error checking whether external.invoke() exists: {:?}",
+                error
+            );
+            false
         }
     }
 }
@@ -105,7 +106,7 @@ pub fn invoke_webview_exists() -> bool {
 /// for the message will poll `Ready`.
 type MessageFuturesMap<RECV> = Arc<DashMap<u32, Arc<RwLock<WakerMessage<RECV>>>>>;
 
-static LISTENER_TYPE: &'static str = "yew-webview-bridge-response";
+static LISTENER_TYPE: &str = "yew-webview-bridge-response";
 
 enum ServiceType<RECV, SND> {
     Webview(WebviewClosureMessageService<RECV, SND>),
