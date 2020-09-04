@@ -95,6 +95,9 @@ pub fn send_response_to_yew<T, M: Serialize>(
     Ok(())
 }
 
+/// An async version of [run_websocket_bridge], using the `async-std`
+/// runtime. `concurrent_limit` is an optional limit on the number of
+/// messages that can be handled concurrently for a given connection.
 pub async fn run_websocket_bridge_async<'a, RECV, SND, H>(concurrent_limit: impl Into<Option<usize>>, listener: async_std::net::TcpListener, message_handler: H) 
 where
     RECV: DeserializeOwned + Debug + Send + 'static,
@@ -153,8 +156,6 @@ where
                                 }
                             };
     
-                            log::debug!("Successfully received message: {:?}", in_message);
-    
                             let response: Option<SND> = task_msg_handler(in_message.inner).await;
     
                             let out_message = Message {
@@ -197,6 +198,9 @@ where
     }
 }
 
+/// Run a websocket server that handles messages using the provided
+/// `message_handler`. Connections are handled in parallel, but
+/// messages per connection are currently handled synchronously.
 pub fn run_websocket_bridge<'a, RECV, SND, H>(listener: std::net::TcpListener, message_handler: H)
 where
     RECV: DeserializeOwned + Serialize + Debug,
@@ -228,8 +232,6 @@ where
                 }
             };
 
-            log::debug!("Successfully connected");
-
             'read_messages: loop {
                 let msg = match websocket.read_message() {
                     Ok(msg) => msg,
@@ -252,8 +254,6 @@ where
                                 continue 'read_messages;
                             }
                         };
-
-                        log::debug!("Successfully received message: {:?}", in_message);
 
                         let response = match thread_message_handler(in_message.inner) {
                             Some(response) => response,
