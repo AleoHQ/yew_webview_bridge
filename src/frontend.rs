@@ -16,19 +16,86 @@ use std::{
     task::{Context, Poll},
 };
 use wasm_bindgen::{
-    prelude::{wasm_bindgen, Closure},
+    prelude::Closure,
     JsCast, JsValue,
 };
-use web_sys::{CustomEvent, Document, EventListener, MessageEvent, WebSocket, Window};
+use web_sys::{CustomEvent, Document, EventListener, MessageEvent, WebSocket, Window, External};
 
-#[wasm_bindgen(module = "/src/js/invoke_webview.js")]
-extern "C" {
-    fn invoke_webview(message: String);
+/// Run the `web-view` defined `window.external.invoke()` method.
+pub fn invoke_webview(message: String) {
+    let window: Window = if let Some(window) = web_sys::window() {
+        window
+    } else {
+        log::error!("Unable to obtain current Window");
+        return;
+    };
+
+    let external: External = match window.external() {
+        Ok(external) => external,
+        Err(error) => {
+            log::error!("Unable to obtain window.external because: {:?}", error);
+            return;
+        }
+    };
+
+    let external_value: JsValue = external.into();
+    let invoke_property_name = JsValue::from_str("invoke");
+    #[allow(unused_unsafe)]
+    let invoke_property = match unsafe { js_sys::Reflect::get(&external_value, &invoke_property_name) } {
+        Ok(prop) => prop,
+        Err(error) => {
+            log::error!("Unable to find external.invoke(): {:?}", error);
+            return;
+        }
+    };
+
+    let invoke_fn: js_sys::Function = match invoke_property.dyn_into::<js_sys::Function>() {
+        Ok(invoke_fn) => invoke_fn,
+        Err(error) => {
+            log::error!("Unable to cast window.invoke() to a Function: {:?}", error);
+            return;
+        }
+    };
+
+    let message_value = JsValue::from_str(&message);
+    
+    if let Err(error) = invoke_fn.call1(&JsValue::NULL, &message_value) {
+        log::error!("Error while calling window.invoke(): {:?}", error);
+        return;
+    }
 }
 
-#[wasm_bindgen(module = "/src/js/invoke_webview_exists.js")]
-extern "C" {
-    fn invoke_webview_exists() -> bool;
+/// Check whether the `window.external.invoke()` method exists, and
+/// thus whether this code is running in a `web-view` context.
+pub fn invoke_webview_exists() -> bool {
+    let window: Window = if let Some(window) = web_sys::window() {
+        window
+    } else {
+        log::error!("Unable to obtain current Window");
+        return false;
+    };
+
+    let external: External = match window.external() {
+        Ok(external) => external,
+        Err(error) => {
+            log::error!("Unable to obtain window.external because: {:?}", error);
+            return false;
+        }
+    };
+
+    let external_value: JsValue = external.into();
+    let invoke_property_name = JsValue::from_str("invoke");
+    #[allow(unused_unsafe)]
+    match unsafe { js_sys::Reflect::has(&external_value, &invoke_property_name) } {
+        Ok(exists) => {
+            log::debug!("Successfully checked external.invoke(), exists: {}", exists);
+            return exists;
+        },
+        Err(error) => {
+            log::error!("Error checking whether external.invoke() exists: {:?}", error);
+            return false;
+        }
+    }
 }
 
 /// A map of message ids
@@ -83,8 +150,6 @@ where
     pub fn new() -> Self {
         #[allow(unused_unsafe)]
         let using_webview = unsafe { invoke_webview_exists() };
-
-        log::debug!("using_webview: {}", using_webview);
 
         let service = if using_webview {
             ServiceType::Webview(WebviewClosureMessageService::new())
