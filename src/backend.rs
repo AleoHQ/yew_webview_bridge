@@ -92,10 +92,21 @@ pub fn send_response_to_yew<T, M: Serialize>(
     Ok(())
 }
 
+fn listener_address(listener: &async_std::net::TcpListener) -> String {
+    match listener.local_addr() {
+        Ok(addr) => format!("{}", addr),
+        Err(_) => "No Address".to_string(),
+    }
+}
+
 /// An async version of [run_websocket_bridge], using the `async-std`
 /// runtime. `concurrent_limit` is an optional limit on the number of
 /// messages that can be handled concurrently for a given connection.
 #[cfg(feature = "async-websocket")]
+#[tracing::instrument(
+    skip(concurrent_limit, listener, message_handler), 
+    fields(listener=%listener_address(&listener)), 
+    level = "debug")]
 pub async fn run_websocket_bridge_async<'a, RECV, SND, H>(
     concurrent_limit: impl Into<Option<usize>>,
     listener: async_std::net::TcpListener,
@@ -114,20 +125,22 @@ pub async fn run_websocket_bridge_async<'a, RECV, SND, H>(
 
     let concurrent_limit: Option<usize> = concurrent_limit.into();
     'connections: loop {
-        let (connection, _address) = match listener.accept().await {
+        let (connection, address) = match listener.accept().await {
             Ok(ok) => ok,
             Err(error) => {
-                log::error!("Error during connection: {}", error);
+                tracing::error!("Error during connection: {}", error);
                 continue 'connections;
             }
         };
+
+        tracing::debug!(message="Accepted connection", address=%address);
 
         let conn_msg_handler = message_handler.clone();
         async_std::task::spawn(async move {
             let ws_stream = match async_tungstenite::accept_async(connection).await {
                 Ok(ws) => ws,
                 Err(error) => {
-                    log::error!("Error during handshake: {}", error);
+                    tracing::error!("Error during handshake: {}", error);
                     return;
                 }
             };
@@ -144,7 +157,7 @@ pub async fn run_websocket_bridge_async<'a, RECV, SND, H>(
                         let msg = match msg_result {
                             Ok(msg) => msg,
                             Err(error) => {
-                                log::error!("Error reading received message: {}", error);
+                                tracing::error!("Error reading received message: {}", error);
                                 return;
                             }
                         };
@@ -161,7 +174,7 @@ pub async fn run_websocket_bridge_async<'a, RECV, SND, H>(
                                 let in_message: Message<RECV> = match de_fut {
                                     Ok(recv) => recv,
                                     Err(error) => {
-                                        log::error!(
+                                        tracing::error!(
                                             "Error deserializing received message: {}",
                                             error
                                         );
@@ -181,7 +194,7 @@ pub async fn run_websocket_bridge_async<'a, RECV, SND, H>(
                                 let send_string = match serde_json::to_string(&out_message) {
                                     Ok(string) => string,
                                     Err(error) => {
-                                        log::error!("Error serializing reply message: {}", error);
+                                        tracing::error!("Error serializing reply message: {}", error);
                                         return;
                                     }
                                 };
@@ -191,7 +204,7 @@ pub async fn run_websocket_bridge_async<'a, RECV, SND, H>(
                                 match fut_ws_out.lock().await.send(msg).await {
                                     Ok(_) => {}
                                     Err(error) => {
-                                        log::error!("Error writing reply message: {}", error);
+                                        tracing::error!("Error writing reply message: {}", error);
                                     }
                                 }
                             }
@@ -228,14 +241,14 @@ where
             let connection = match connection {
                 Ok(connection) => connection,
                 Err(error) => {
-                    log::error!("Error during connection: {}", error);
+                    tracing::error!("Error during connection: {}", error);
                     return;
                 }
             };
             let mut websocket = match tungstenite::accept(connection) {
                 Ok(websocket) => websocket,
                 Err(error) => {
-                    log::error!("Error during handshake: {}", error);
+                    tracing::error!("Error during handshake: {}", error);
                     return;
                 }
             };
@@ -244,7 +257,7 @@ where
                 let msg = match websocket.read_message() {
                     Ok(msg) => msg,
                     Err(error) => {
-                        log::error!("Error reading received message: {}", error);
+                        tracing::error!("Error reading received message: {}", error);
                         continue 'read_messages;
                     }
                 };
@@ -255,7 +268,7 @@ where
                         {
                             Ok(recv) => recv,
                             Err(error) => {
-                                log::error!("Error deserializing received message: {}", error);
+                                tracing::error!("Error deserializing received message: {}", error);
                                 continue 'read_messages;
                             }
                         };
@@ -276,7 +289,7 @@ where
                         let send_string = match serde_json::to_string(&out_message) {
                             Ok(string) => string,
                             Err(error) => {
-                                log::error!("Error serializing reply message: {}", error);
+                                tracing::error!("Error serializing reply message: {}", error);
                                 continue 'read_messages;
                             }
                         };
@@ -286,7 +299,7 @@ where
                         match websocket.write_message(msg) {
                             Ok(_) => {}
                             Err(error) => {
-                                log::error!("Error writing reply message: {}", error);
+                                tracing::error!("Error writing reply message: {}", error);
                             }
                         }
                     }

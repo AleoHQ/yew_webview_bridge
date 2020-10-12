@@ -23,14 +23,14 @@ pub fn invoke_webview(message: String) {
     let window: Window = if let Some(window) = web_sys::window() {
         window
     } else {
-        log::error!("Unable to obtain current Window");
+        tracing::error!("Unable to obtain current Window");
         return;
     };
 
     let external: External = match window.external() {
         Ok(external) => external,
         Err(error) => {
-            log::error!("Unable to obtain window.external because: {:?}", error);
+            tracing::error!("Unable to obtain window.external because: {:?}", error);
             return;
         }
     };
@@ -42,7 +42,7 @@ pub fn invoke_webview(message: String) {
         match unsafe { js_sys::Reflect::get(&external_value, &invoke_property_name) } {
             Ok(prop) => prop,
             Err(error) => {
-                log::error!("Unable to find external.invoke(): {:?}", error);
+                tracing::error!("Unable to find external.invoke(): {:?}", error);
                 return;
             }
         };
@@ -50,7 +50,7 @@ pub fn invoke_webview(message: String) {
     let invoke_fn: js_sys::Function = match invoke_property.dyn_into::<js_sys::Function>() {
         Ok(invoke_fn) => invoke_fn,
         Err(error) => {
-            log::error!("Unable to cast window.invoke() to a Function: {:?}", error);
+            tracing::error!("Unable to cast window.invoke() to a Function: {:?}", error);
             return;
         }
     };
@@ -58,7 +58,7 @@ pub fn invoke_webview(message: String) {
     let message_value = JsValue::from_str(&message);
 
     if let Err(error) = invoke_fn.call1(&JsValue::NULL, &message_value) {
-        log::error!("Error while calling window.invoke(): {:?}", error);
+        tracing::error!("Error while calling window.invoke(): {:?}", error);
         return;
     }
 }
@@ -69,14 +69,14 @@ pub fn invoke_webview_exists() -> bool {
     let window: Window = if let Some(window) = web_sys::window() {
         window
     } else {
-        log::error!("Unable to obtain current Window");
+        tracing::error!("Unable to obtain current Window");
         return false;
     };
 
     let external: External = match window.external() {
         Ok(external) => external,
         Err(error) => {
-            log::error!("Unable to obtain window.external because: {:?}", error);
+            tracing::error!("Unable to obtain window.external because: {:?}", error);
             return false;
         }
     };
@@ -86,11 +86,11 @@ pub fn invoke_webview_exists() -> bool {
     #[allow(unused_unsafe)]
     match unsafe { js_sys::Reflect::has(&external_value, &invoke_property_name) } {
         Ok(exists) => {
-            log::debug!("Successfully checked external.invoke(), exists: {}", exists);
+            tracing::debug!("Successfully checked external.invoke(), exists: {}", exists);
             exists
         }
         Err(error) => {
-            log::error!(
+            tracing::error!(
                 "Error checking whether external.invoke() exists: {:?}",
                 error
             );
@@ -289,7 +289,7 @@ where
                 self.send_message_impl(&message);
             }
             // CLOSING or CLOSED
-            2 | 3 => log::error!("Cannot send message, websocket is already closing/closed"),
+            2 | 3 => tracing::error!("Cannot send message, websocket is already closing/closed"),
             unknown => {
                 panic!("Unknown websocket ready_state: {}", unknown);
             }
@@ -302,7 +302,7 @@ where
         let message_serialized =
             serde_json::to_string(message).expect("unable to serialize message");
         if let Err(error) = self.websocket.send_with_str(&message_serialized) {
-            log::error!(target: "yew_webview_bridge", "Error while sending message: {:?}", error);
+            tracing::error!(target: "yew_webview_bridge", "Error while sending message: {:?}", error);
         }
     }
 
@@ -318,7 +318,7 @@ where
             }
             // CLOSING or CLOSED
             2 | 3 => {
-                log::error!("Cannot send messages in queue, websocket is already closing/closed")
+                tracing::error!("Cannot send messages in queue, websocket is already closing/closed")
             }
             unknown => {
                 panic!("Unknown websocket ready_state: {}", unknown);
@@ -370,7 +370,7 @@ where
 
         let onopen_data = callback_data.clone();
         let onopen_callback = Closure::wrap(Box::new(move |_| {
-            log::debug!("websocket opened");
+            tracing::debug!("websocket opened");
             onopen_data.send_queue();
         }) as Box<dyn FnMut(JsValue)>);
         callback_data
@@ -389,7 +389,7 @@ where
                     &message_string,
                 );
             } else {
-                log::error!("message event, received Unknown: {:?}", event.data());
+                tracing::error!("message event, received Unknown: {:?}", event.data());
             }
         }) as Box<dyn FnMut(MessageEvent)>);
         callback_data
@@ -409,7 +409,7 @@ impl<RECV, SND> Drop for WebsocketMessageService<RECV, SND> {
     /// Removes the event listener.
     fn drop(&mut self) {
         if let Err(error) = self.callback_data.websocket.close_with_code(1000) {
-            log::error!(target: "yew_webview_bridge", "Error while closing websocket: {:?}", error)
+            tracing::error!(target: "yew_webview_bridge", "Error while closing websocket: {:?}", error)
         }
     }
 }
