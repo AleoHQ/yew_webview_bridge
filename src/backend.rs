@@ -185,26 +185,28 @@ pub async fn run_websocket_bridge_async<'a, RECV, SND, H>(
                                 let response: Option<SND> =
                                     task_msg_handler(in_message.inner).await;
 
-                                let out_message = Message {
-                                    subscription_id: in_message.subscription_id,
-                                    message_id: in_message.message_id,
-                                    inner: response,
-                                };
-
-                                let send_string = match serde_json::to_string(&out_message) {
-                                    Ok(string) => string,
-                                    Err(error) => {
-                                        tracing::error!("Error serializing reply message: {}", error);
-                                        return;
-                                    }
-                                };
-
-                                let msg = tungstenite::Message::Text(send_string);
-
-                                match fut_ws_out.lock().await.send(msg).await {
-                                    Ok(_) => {}
-                                    Err(error) => {
-                                        tracing::error!("Error writing reply message: {}", error);
+                                if let Some(response_message) = response {
+                                    let out_message = Message {
+                                        subscription_id: in_message.subscription_id,
+                                        message_id: in_message.message_id,
+                                        inner: response_message,
+                                    };
+    
+                                    let send_string = match serde_json::to_string(&out_message) {
+                                        Ok(string) => string,
+                                        Err(error) => {
+                                            tracing::error!("Error serializing reply message: {}", error);
+                                            return;
+                                        }
+                                    };
+    
+                                    let msg = tungstenite::Message::Text(send_string);
+    
+                                    match fut_ws_out.lock().await.send(msg).await {
+                                        Ok(_) => {}
+                                        Err(error) => {
+                                            tracing::error!("Error writing reply message: {}", error);
+                                        }
                                     }
                                 }
                             }
