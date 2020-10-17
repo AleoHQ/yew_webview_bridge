@@ -149,8 +149,7 @@ where
     SND: Serialize + 'static,
 {
     pub fn new() -> Self {
-        #[allow(unused_unsafe)]
-        let using_webview = unsafe { invoke_webview_exists() };
+        let using_webview = invoke_webview_exists();
 
         let service = if using_webview {
             ServiceType::Webview(WebviewClosureMessageService::new())
