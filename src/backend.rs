@@ -191,21 +191,27 @@ pub async fn run_websocket_bridge_async<'a, RECV, SND, H>(
                                         message_id: in_message.message_id,
                                         inner: response_message,
                                     };
-    
+
                                     let send_string = match serde_json::to_string(&out_message) {
                                         Ok(string) => string,
                                         Err(error) => {
-                                            tracing::error!("Error serializing reply message: {}", error);
+                                            tracing::error!(
+                                                "Error serializing reply message: {}",
+                                                error
+                                            );
                                             return;
                                         }
                                     };
-    
+
                                     let msg = tungstenite::Message::Text(send_string);
-    
+
                                     match fut_ws_out.lock().await.send(msg).await {
                                         Ok(_) => {}
                                         Err(error) => {
-                                            tracing::error!("Error writing reply message: {}", error);
+                                            tracing::error!(
+                                                "Error writing reply message: {}",
+                                                error
+                                            );
                                         }
                                     }
                                 }

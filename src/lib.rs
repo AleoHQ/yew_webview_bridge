@@ -1,6 +1,7 @@
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::{sync::Arc, task::Waker};
+
+use std::{fmt::Display, sync::Arc, task::Waker};
 
 /// The message passed between the backend and frontend. Includes
 /// associated metadata ensuring that the message is delivered to the
@@ -47,24 +48,86 @@ impl<T> Message<T> {
 /// The waker and the message data for a given message id. When these
 /// are set to `Some`, the `Future` waiting for the message will poll
 /// `Ready`.
-struct WakerMessage<RECV> {
+struct MessageWaker<RECV> {
     pub waker: Option<Waker>,
-    pub message: Option<Arc<RECV>>,
+    pub message_result: Option<Arc<Result<RECV, MessageError>>>,
 }
 
-impl<RECV> WakerMessage<RECV> {
+impl<RECV> MessageWaker<RECV> {
     pub fn new() -> Self {
-        WakerMessage {
+        MessageWaker {
             waker: None,
-            message: None,
+            message_result: None,
         }
     }
 }
 
-impl<RECV> Default for WakerMessage<RECV> {
+impl<RECV> Default for MessageWaker<RECV> {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[derive(Debug)]
+pub struct MessageError {
+    error_type: MessageErrorType,
+    action: MessageAction,
+    source: Option<Box<dyn std::error::Error + 'static>>,
+}
+
+impl MessageError {
+    pub(crate) fn new(action: MessageAction, error_type: MessageErrorType) -> Self {
+        Self {
+            error_type,
+            action,
+            source: None,
+        }
+    }
+
+    pub(crate) fn with_source<C: std::error::Error + 'static>(mut self, source: C) -> Self {
+        self.source = Some(Box::new(source));
+        self
+    }
+}
+
+impl Display for MessageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.action {
+            MessageAction::Sending => {
+                write!(f, "Error while sending message.")?;
+            }
+            MessageAction::Receiving => {
+                write!(f, "Error while receiving message.")?;
+            }
+        }
+
+        match self.error_type {
+            MessageErrorType::ConnectionClosed => write!(f, " Connection is closing/closed."),
+            MessageErrorType::UnableToSerialize => write!(f, " Unable to serialize message."),
+            MessageErrorType::UnableToDeserialze => write!(f, " Unable to deserialize message."),
+            MessageErrorType::Websocket => write!(f, " Error with the websocket connection."),
+        }
+    }
+}
+
+impl std::error::Error for MessageError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source.as_ref().map(|source| &**source)
+    }
+}
+
+#[derive(Debug)]
+pub enum MessageAction {
+    Sending,
+    Receiving,
+}
+
+#[derive(Debug)]
+pub enum MessageErrorType {
+    ConnectionClosed,
+    UnableToSerialize,
+    UnableToDeserialze,
+    Websocket,
 }
 
 #[cfg(feature = "frontend")]

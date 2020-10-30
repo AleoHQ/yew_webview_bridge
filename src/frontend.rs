@@ -2,11 +2,14 @@
 //! for use in a Rust front-end using the `yew` framework compiled
 //! to WASM, and running in `web-view`.
 
-pub use super::Message;
-use crate::WakerMessage;
+pub use super::{Message, MessageError};
+use crate::{MessageAction, MessageErrorType, MessageWaker};
+
 use dashmap::DashMap;
 use serde::{de::DeserializeOwned, Serialize};
-use std::future::Future;
+use wasm_bindgen::{prelude::Closure, JsCast, JsValue};
+use web_sys::{CustomEvent, Document, EventListener, External, MessageEvent, WebSocket, Window};
+
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
@@ -15,8 +18,30 @@ use std::{
     rc::Rc,
     task::{Context, Poll},
 };
-use wasm_bindgen::{prelude::Closure, JsCast, JsValue};
-use web_sys::{CustomEvent, Document, EventListener, External, MessageEvent, WebSocket, Window};
+use std::{fmt::Display, future::Future};
+
+#[derive(Debug)]
+struct JsError {
+    value: JsValue,
+}
+
+impl Display for JsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.value)
+    }
+}
+
+impl From<JsValue> for JsError {
+    fn from(value: JsValue) -> Self {
+        Self { value }
+    }
+}
+
+impl std::error::Error for JsError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        None
+    }
+}
 
 /// Run the `web-view` defined `window.external.invoke()` method.
 pub fn invoke_webview(message: String) {
@@ -104,7 +129,7 @@ pub fn invoke_webview_exists() -> bool {
 /// the task which is waiting, and the message data. When the
 /// [WakerMessage](WakerMessage) data is set, the `Future` waiting
 /// for the message will poll `Ready`.
-type MessageFuturesMap<RECV> = Arc<DashMap<u32, Arc<RwLock<WakerMessage<RECV>>>>>;
+type MessageFuturesMap<RECV> = Arc<DashMap<u32, Arc<RwLock<MessageWaker<RECV>>>>>;
 
 static LISTENER_TYPE: &str = "yew-webview-bridge-response";
 
@@ -235,7 +260,7 @@ where
 
         let future = MessageFuture::new();
         self.message_futures_map
-            .insert(message.message_id, future.message.clone());
+            .insert(message.message_id, future.message_waker.clone());
 
         let message_serialized =
             serde_json::to_string(&message).expect("unable to serialize message");
@@ -278,31 +303,49 @@ where
 
         let future = MessageFuture::new();
         self.message_futures_map
-            .insert(message.message_id, future.message.clone());
+            .insert(message.message_id, future.message_waker.clone());
 
-        match self.websocket.ready_state() {
+        let send_result: Result<(), MessageError> = match self.websocket.ready_state() {
             // CONNECTING
-            0 => self.queued.borrow_mut().push(message),
-            // OPEN
-            1 => {
-                self.send_message_impl(&message);
+            0 => {
+                self.queued.borrow_mut().push(message);
+                Ok(())
             }
+            // OPEN
+            1 => self.send_message_impl(&message),
             // CLOSING or CLOSED
-            2 | 3 => tracing::error!("Cannot send message, websocket is already closing/closed"),
+            2 | 3 => Err(MessageError::new(
+                MessageAction::Sending,
+                MessageErrorType::ConnectionClosed,
+            )),
             unknown => {
                 panic!("Unknown websocket ready_state: {}", unknown);
             }
+        };
+
+        if let Err(error) = send_result {
+            future
+                .message_waker
+                .write()
+                .expect("unable to obtain write lock for MessageWaker in message_futures_map")
+                .message_result = Some(Arc::new(Err(error)));
         }
 
         future
     }
 
-    fn send_message_impl(&self, message: &Message<SND>) {
-        let message_serialized =
-            serde_json::to_string(message).expect("unable to serialize message");
+    fn send_message_impl(&self, message: &Message<SND>) -> Result<(), MessageError> {
+        let message_serialized = serde_json::to_string(message).map_err(|json_error| {
+            MessageError::new(MessageAction::Sending, MessageErrorType::UnableToSerialize)
+                .with_source(json_error)
+        })?;
         if let Err(error) = self.websocket.send_with_str(&message_serialized) {
-            tracing::error!(target: "yew_webview_bridge", "Error while sending message: {:?}", error);
+            return Err(
+                MessageError::new(MessageAction::Sending, MessageErrorType::Websocket)
+                    .with_source(JsError::from(error)),
+            );
         }
+        Ok(())
     }
 
     fn send_queue(&self) {
@@ -311,13 +354,33 @@ where
             0 => {}
             // OPEN
             1 => {
-                for message in self.queued.borrow().iter() {
-                    self.send_message_impl(message);
-                }
+                self.queued.borrow().iter().for_each(|message| {
+                    if let Err(error) = self.send_message_impl(message) {
+                        let message_waker_ref = self.message_futures_map.get_mut(&message.message_id)
+                            .unwrap_or_else(|| panic!("Expected message {} to have a corresponding \
+                                                       waker in the `message_futures_map`.", 
+                                                       message.message_id));
+                        message_waker_ref.value()
+                            .write()
+                            .expect("unable to write to value in message_futures_map")
+                            .message_result = Some(Arc::new(Err(error)));
+                    }
+                });
             }
             // CLOSING or CLOSED
             2 | 3 => {
-                tracing::error!("Cannot send messages in queue, websocket is already closing/closed")
+                self.queued.borrow().iter().for_each(|message| {
+                    let message_waker_ref = self.message_futures_map.get_mut(&message.message_id)
+                    .unwrap_or_else(|| panic!("Expected message {} to have a corresponding \
+                                               waker in the `message_futures_map`.", 
+                                               message.message_id));
+
+                    let error = MessageError::new(MessageAction::Sending, MessageErrorType::ConnectionClosed);
+                    message_waker_ref.value()
+                        .write()
+                        .expect("unable to write to value in message_futures_map")
+                        .message_result = Some(Arc::new(Err(error)));
+                });
             }
             unknown => {
                 panic!("Unknown websocket ready_state: {}", unknown);
@@ -423,9 +486,10 @@ where
     }
 }
 
-/// Handle an event coming from the `web-view` backend, and
-/// respond to it, resolving/waking the relevent pending
-/// future (with matching message id), if there are any.
+/// Handle an event coming from the `web-view` backend, and respond to
+/// it (if the event matches the specified `subscription_id`),
+/// resolving/waking the relevent pending future (with matching
+/// message id), if there are any.
 fn response_handler<R>(
     subscription_id: u32,
     message_futures_map: &MessageFuturesMap<R>,
@@ -455,8 +519,8 @@ fn response_handler<R>(
 
     let mut future_value_write = future_value
         .write()
-        .expect("unable to obtain write lock for WakerMessage in message_futures_map");
-    future_value_write.message = Some(Arc::new(message.inner));
+        .expect("unable to obtain write lock for MessageWaker in message_futures_map");
+    future_value_write.message_result = Some(Arc::new(Ok(message.inner)));
     future_value_write.waker.as_ref().map(|waker| {
         waker.wake_by_ref();
     });
@@ -464,7 +528,7 @@ fn response_handler<R>(
 
 /// A message that will be received in the future.
 pub struct MessageFuture<RECV> {
-    message: Arc<RwLock<WakerMessage<RECV>>>,
+    message_waker: Arc<RwLock<MessageWaker<RECV>>>,
     return_type: PhantomData<RECV>,
 }
 
@@ -474,7 +538,7 @@ where
 {
     pub fn new() -> Self {
         Self {
-            message: Arc::new(RwLock::new(WakerMessage::default())),
+            message_waker: Arc::new(RwLock::new(MessageWaker::default())),
             return_type: PhantomData,
         }
     }
@@ -484,23 +548,25 @@ impl<RECV> Future for MessageFuture<RECV>
 where
     RECV: DeserializeOwned,
 {
-    type Output = Arc<RECV>;
+    type Output = Arc<Result<RECV, MessageError>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let mut waker_message = self
-            .message
+        let mut message_waker = self
+            .message_waker
             .write()
-            .expect("unable to obtain RwLock on message");
+            .expect("unable to obtain RwLock on MessageWaker instance");
 
-        if (*waker_message).message.is_none() {
-            waker_message.waker = Some(cx.waker().clone());
+        // Set the waker for this future so that it can be woken later
+        // when the message is received in `response_handler`.
+        if (*message_waker).message_result.is_none() {
+            message_waker.waker = Some(cx.waker().clone());
             return Poll::Pending;
         }
 
-        let message = waker_message
-            .message
+        let message_result = message_waker
+            .message_result
             .as_ref()
-            .expect("unable to obtain reference to message in WakerMessage");
-        Poll::Ready(message.clone())
+            .expect("unable to obtain reference to message in MessageWaker");
+        Poll::Ready(message_result.clone())
     }
 }
