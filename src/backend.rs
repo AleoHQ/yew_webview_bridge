@@ -104,8 +104,8 @@ fn listener_address(listener: &async_std::net::TcpListener) -> String {
 /// messages that can be handled concurrently for a given connection.
 #[cfg(feature = "async-websocket")]
 #[tracing::instrument(
-    skip(concurrent_limit, listener, message_handler), 
-    fields(listener=%listener_address(&listener)), 
+    skip(concurrent_limit, listener, message_handler),
+    fields(listener=%listener_address(&listener)),
     level = "debug")]
 pub async fn run_websocket_bridge_async<'a, RECV, SND, H>(
     concurrent_limit: impl Into<Option<usize>>,

@@ -3,7 +3,7 @@
 //! to WASM, and running in `web-view`.
 
 pub use super::{Message, MessageError};
-use crate::{MessageAction, MessageErrorType, MessageWaker};
+use crate::{MessageAction, MessageErrorType, MessageResult, MessageWaker, MessageWakerResult};
 
 use dashmap::DashMap;
 use serde::{de::DeserializeOwned, Serialize};
@@ -328,7 +328,7 @@ where
                 .message_waker
                 .write()
                 .expect("unable to obtain write lock for MessageWaker in message_futures_map")
-                .message_result = Some(Arc::new(Err(error)));
+                .message_result = MessageWakerResult::Err(Arc::new(error));
         }
 
         future
@@ -356,30 +356,47 @@ where
             1 => {
                 self.queued.borrow().iter().for_each(|message| {
                     if let Err(error) = self.send_message_impl(message) {
-                        let message_waker_ref = self.message_futures_map.get_mut(&message.message_id)
-                            .unwrap_or_else(|| panic!("Expected message {} to have a corresponding \
-                                                       waker in the `message_futures_map`.", 
-                                                       message.message_id));
-                        message_waker_ref.value()
+                        let message_waker_ref = self
+                            .message_futures_map
+                            .get_mut(&message.message_id)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "Expected message {} to have a corresponding \
+                                                       waker in the `message_futures_map`.",
+                                    message.message_id
+                                )
+                            });
+                        message_waker_ref
+                            .value()
                             .write()
                             .expect("unable to write to value in message_futures_map")
-                            .message_result = Some(Arc::new(Err(error)));
+                            .message_result = MessageWakerResult::Err(Arc::new(error));
                     }
                 });
             }
             // CLOSING or CLOSED
             2 | 3 => {
                 self.queued.borrow().iter().for_each(|message| {
-                    let message_waker_ref = self.message_futures_map.get_mut(&message.message_id)
-                    .unwrap_or_else(|| panic!("Expected message {} to have a corresponding \
-                                               waker in the `message_futures_map`.", 
-                                               message.message_id));
+                    let message_waker_ref = self
+                        .message_futures_map
+                        .get_mut(&message.message_id)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "Expected message {} to have a corresponding \
+                                               waker in the `message_futures_map`.",
+                                message.message_id
+                            )
+                        });
 
-                    let error = MessageError::new(MessageAction::Sending, MessageErrorType::ConnectionClosed);
-                    message_waker_ref.value()
+                    let error = MessageError::new(
+                        MessageAction::Sending,
+                        MessageErrorType::ConnectionClosed,
+                    );
+                    message_waker_ref
+                        .value()
                         .write()
                         .expect("unable to write to value in message_futures_map")
-                        .message_result = Some(Arc::new(Err(error)));
+                        .message_result = MessageWakerResult::Err(Arc::new(error));
                 });
             }
             unknown => {
@@ -520,7 +537,7 @@ fn response_handler<R>(
     let mut future_value_write = future_value
         .write()
         .expect("unable to obtain write lock for MessageWaker in message_futures_map");
-    future_value_write.message_result = Some(Arc::new(Ok(message.inner)));
+    future_value_write.message_result = MessageWakerResult::Ok(Arc::new(message.inner));
     future_value_write.waker.as_ref().map(|waker| {
         waker.wake_by_ref();
     });
@@ -548,7 +565,7 @@ impl<RECV> Future for MessageFuture<RECV>
 where
     RECV: DeserializeOwned,
 {
-    type Output = Arc<Result<RECV, MessageError>>;
+    type Output = MessageResult<RECV>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let mut message_waker = self
@@ -565,8 +582,7 @@ where
 
         let message_result = message_waker
             .message_result
-            .as_ref()
-            .expect("unable to obtain reference to message in MessageWaker");
+            .expect_result("MessageWaker result is None");
         Poll::Ready(message_result.clone())
     }
 }
