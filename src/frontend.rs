@@ -3,7 +3,7 @@
 //! to WASM, and running in `web-view`.
 
 pub use super::{Message, MessageError};
-use crate::{MessageAction, MessageErrorType, MessageResult, MessageWaker, MessageWakerResult};
+use crate::{MessageAction, MessageErrorType, MessageResult, MessageWaker, MessageWakerState};
 
 use dashmap::DashMap;
 use serde::{de::DeserializeOwned, Serialize};
@@ -328,7 +328,7 @@ where
                 .message_waker
                 .write()
                 .expect("unable to obtain write lock for MessageWaker in message_futures_map")
-                .message_result = MessageWakerResult::Err(Arc::new(error));
+                .state = MessageWakerState::Err(Arc::new(error));
         }
 
         future
@@ -370,7 +370,7 @@ where
                             .value()
                             .write()
                             .expect("unable to write to value in message_futures_map")
-                            .message_result = MessageWakerResult::Err(Arc::new(error));
+                            .state = MessageWakerState::Err(Arc::new(error));
                     }
                 });
             }
@@ -396,7 +396,7 @@ where
                         .value()
                         .write()
                         .expect("unable to write to value in message_futures_map")
-                        .message_result = MessageWakerResult::Err(Arc::new(error));
+                        .state = MessageWakerState::Err(Arc::new(error));
                 });
             }
             unknown => {
@@ -537,7 +537,7 @@ fn response_handler<R>(
     let mut future_value_write = future_value
         .write()
         .expect("unable to obtain write lock for MessageWaker in message_futures_map");
-    future_value_write.message_result = MessageWakerResult::Ok(Arc::new(message.inner));
+    future_value_write.state = MessageWakerState::Ok(Arc::new(message.inner));
     future_value_write.waker.as_ref().map(|waker| {
         waker.wake_by_ref();
     });
@@ -573,16 +573,17 @@ where
             .write()
             .expect("unable to obtain RwLock on MessageWaker instance");
 
-        // Set the waker for this future so that it can be woken later
-        // when the message is received in `response_handler`.
-        if (*message_waker).message_result.is_none() {
-            message_waker.waker = Some(cx.waker().clone());
-            return Poll::Pending;
+        match &message_waker.state {
+            MessageWakerState::Ok(ok) => {
+                Poll::Ready(Ok(ok.clone()))
+            },
+            MessageWakerState::Err(err) => {
+                Poll::Ready(Err((**err).clone()))
+            },
+            MessageWakerState::None => {
+                message_waker.waker = Some(cx.waker().clone());
+                Poll::Pending
+            }
         }
-
-        let message_result = message_waker
-            .message_result
-            .expect_result("MessageWaker result is None");
-        Poll::Ready(message_result.clone())
     }
 }

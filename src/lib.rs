@@ -45,30 +45,18 @@ impl<T> Message<T> {
     }
 }
 
-enum MessageWakerResult<RECV> {
+/// Represents the state of a [MessageWaker].
+enum MessageWakerState<RECV> {
+    /// Message has been received, and ready to wake the future.
     Ok(Arc<RECV>),
+    /// An error has triggered, message has not been received, ready
+    /// to wake the future.
     Err(Arc<MessageError>),
+    /// Message has not been received.
     None,
 }
 
-impl<RECV> MessageWakerResult<RECV> {
-    pub fn is_none(&self) -> bool {
-        match self {
-            MessageWakerResult::None => true,
-            _ => false,
-        }
-    }
-
-    pub fn expect_result(&self, message: &str) -> MessageResult<RECV> {
-        match self {
-            MessageWakerResult::Ok(ok) => Ok(ok.clone()),
-            MessageWakerResult::Err(err) => Err((**err).clone()),
-            MessageWakerResult::None => panic!("{}", message),
-        }
-    }
-}
-
-impl<RECV> Default for MessageWakerResult<RECV> {
+impl<RECV> Default for MessageWakerState<RECV> {
     fn default() -> Self {
         Self::None
     }
@@ -81,14 +69,14 @@ pub type MessageResult<RECV> = Result<Arc<RECV>, MessageError>;
 /// `Ready`.
 struct MessageWaker<RECV> {
     pub waker: Option<Waker>,
-    pub message_result: MessageWakerResult<RECV>,
+    pub state: MessageWakerState<RECV>,
 }
 
 impl<RECV> MessageWaker<RECV> {
     pub fn new() -> Self {
         MessageWaker {
             waker: None,
-            message_result: MessageWakerResult::None,
+            state: MessageWakerState::None,
         }
     }
 }
