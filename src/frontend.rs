@@ -574,12 +574,8 @@ where
             .expect("unable to obtain RwLock on MessageWaker instance");
 
         match &message_waker.state {
-            MessageWakerState::Ok(ok) => {
-                Poll::Ready(Ok(ok.clone()))
-            },
-            MessageWakerState::Err(err) => {
-                Poll::Ready(Err((**err).clone()))
-            },
+            MessageWakerState::Ok(ok) => Poll::Ready(Ok(ok.clone())),
+            MessageWakerState::Err(err) => Poll::Ready(Err((**err).clone())),
             MessageWakerState::None => {
                 message_waker.waker = Some(cx.waker().clone());
                 Poll::Pending
