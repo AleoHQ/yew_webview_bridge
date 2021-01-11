@@ -26,7 +26,7 @@ yew = { version = "0.17", optional = true }
 
 # backend
 async-tungstenite = { version = "0.12", optional = true, features = ["async-std-runtime"] }
-async-std = { version = "1.6", optional = true }
+async-std = { version = "1.8", optional = true }
 futures-util = { version = "0.3", optional = true }
 tungstenite = { version = "0.12", optional = true }
 web-view = { version = "0.7", optional = true }
