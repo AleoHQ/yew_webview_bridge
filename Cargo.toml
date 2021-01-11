@@ -12,7 +12,7 @@ readme = "README.md"
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
-rand = { version = "0.8", features = ["wasm-bindgen"] }
+rand = "0.8"
 tracing = { version = "0.1", features = ["attributes"] }
 tracing-futures = { version = "0.2", default-features = false, features = ["std", "std-future", "futures-03"] }
 thiserror = "1.0"
