@@ -12,24 +12,24 @@ readme = "README.md"
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
-rand = { version = "0.7", features = ["wasm-bindgen"] }
+rand = { version = "0.8", features = ["wasm-bindgen"] }
 tracing = { version = "0.1", features = ["attributes"] }
 tracing-futures = { version = "0.2", default-features = false, features = ["std", "std-future", "futures-03"] }
 thiserror = "1.0"
 
 # frontend
-dashmap = { version = "3.11", optional = true }
+dashmap = { version = "4.0", optional = true }
 js-sys = { version = "0.3", optional = true }
 wasm-bindgen = { version = "0.2", optional = true, features = ["serde-serialize"] }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 yew = { version = "0.17", optional = true }
 
 # backend
-async-tungstenite = { version = "0.8.0", optional = true, features = ["async-std-runtime"] }
+async-tungstenite = { version = "0.12", optional = true, features = ["async-std-runtime"] }
 async-std = { version = "1.6", optional = true }
 futures-util = { version = "0.3", optional = true }
-tungstenite = { version = "0.11", optional = true }
-web-view = { version = "0.6", optional = true }
+tungstenite = { version = "0.12", optional = true }
+web-view = { version = "0.7", optional = true }
 
 [dependencies.web-sys]
 version = "0.3"
