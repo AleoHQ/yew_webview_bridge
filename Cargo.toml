@@ -55,7 +55,7 @@ optional = true
 default = []
 
 log = ["tracing/log"]
-frontend = ["yew", "wasm-bindgen-futures", "wasm-bindgen", "dashmap", "web-sys", "js-sys", "getrandom/wasm-bindgen"]
+frontend = ["yew", "wasm-bindgen-futures", "wasm-bindgen", "dashmap", "web-sys", "js-sys", "getrandom/js"]
 backend = ["web-view"]
 websocket = ["tungstenite"]
 async-websocket = ["tungstenite", "async-tungstenite", "async-std", "futures-util"]
