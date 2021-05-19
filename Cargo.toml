@@ -10,6 +10,7 @@ repository = "https://github.com/hobofan/yew_webview_bridge"
 readme = "README.md"
 
 [dependencies]
+getrandom = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 rand = "0.8"
@@ -54,7 +55,7 @@ optional = true
 default = []
 
 log = ["tracing/log"]
-frontend = ["yew", "wasm-bindgen-futures", "wasm-bindgen", "dashmap", "web-sys", "js-sys"]
+frontend = ["yew", "wasm-bindgen-futures", "wasm-bindgen", "dashmap", "web-sys", "js-sys", "getrandom/wasm-bindgen"]
 backend = ["web-view"]
 websocket = ["tungstenite"]
 async-websocket = ["tungstenite", "async-tungstenite", "async-std", "futures-util"]
